@@ -1,0 +1,17 @@
+#!/bin/bash
+
+#script used to get pear to merge reads
+#assumes a bunch of files in the current directory
+#called *R1*.fastq.gz and *R2*.fastq.gz
+for gfile in *R1*.fastq.gz
+do 
+  pear -f $gfile \
+  -r ${gfile/R1/R2} \
+  -o merged/${gfile/_R1.fq/} \
+  -n 33 \
+  -t 33 \
+  -q 10 \
+  -j 20  #>> merged/pear.log 2>&1
+done
+
+
