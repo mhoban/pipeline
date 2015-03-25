@@ -1,48 +1,136 @@
 #!/bin/bash
 
-#ssh commands
-ssh jw2@166.122.79.71
+#Notes/Questions
+#cutadapt: why does the R2 read have the -m 30 otions set, but the R1 read doesn't?
+
+#Dependencies managed by homebrew:
+#fastqc
+
+#Dependencies installed manually
+#cutadapt (installed via python pip)
+
+
+#General setup variables
+########################################################################################
+#data directories:
+basedir=/Users/deadbilly/code/pipeline    #base directory for pipeline junk
+datadir=$basedir/data/shark               #base directory for sequence data / config
+configdir=$datadir/config                 #various config files live in here
+fastqdir=$datadir/sample.fastq/           #directory where raw fastq files are stored
+                                          #fastq filenames are expected to be in the 
+                                          #format *_SAMPLEID_*_R1_*.fasta.gz/*_SAMPLEID_*_R2_*.fasta.gz
+#working directories:
+outputdir=$datadir/output
+
+
+#executable directories:
+sysutil=/usr/local/bin                    #utility binary directory (systemwide)
+locutil=$basedir/bin                      #utility binary directory (locally installed)
+########################################################################################
+
+#setup stuff:
+mkdir -p $outputdir       #create working output directory
+
+function ask {
+  read -s -n 1 -r -p "$1" yn; echo
+  if [[ $yn =~ ^[Yy]$ ]]
+  then
+    return 0
+  else
+    return 1
+  fi
+}
+
 
 
 ############  Prepare REFERENCE GENOME #################
 #import data from server
-wget --user=biocore --password=1234qwerty 'http://courge.ics.hawaii.edu/~mahdi/11_22_2013/Project_Jon_Whitney.tar.gz'
+#wget --user=biocore --password=1234qwerty 'http://courge.ics.hawaii.edu/~mahdi/11_22_2013/Project_Jon_Whitney.tar.gz'
 
 
 ########### Preparing Raw Sequences ############
-#unzip tar.gz
-tar -zxvf Project_Jon_Whitney
-gunzip *.fastq.gz   #unzip all sequences with .gz
 
-#concatenate files (if each read set was parsed into multiple files, e.g., if more than 4 million reads on GAIIx)
-cat MEL_CTTGTA_L005_R1_00*.fastq > MEL_R1.fastq
-cat MEL_CTTGTA_L005_R2_00*.fastq > MEL_R2.fastq
-cat PW5_GCCAAT_L005_R1_00*.fastq > PWS_R1.fastq
-cat PW5_GCCAAT_L005_R2_00*.fastq > PWS_R2.fastq
+#Generate quality stats with fastqc
+#####################################
+if ask "Generate initial FastQC report? [y/N]"
+then
+  mkdir -p $outputdir/QC
+  echo "Generating FastQC reports..."
+  $sysutil/fastqc -o $outputdir/QC $fastqdir/*.fastq.gz
+fi
 
-#run FastQC on raw files to visualize quality stats 
-/home/mahdi/programs/FastQC/fastqc  MEL_R1.fastq
-/home/mahdi/programs/FastQC/fastqc  PWS_R1.fastq
-/home/mahdi/programs/FastQC/fastqc  MEL_R2.fastq
-/home/mahdi/programs/FastQC/fastqc  PWS_R2.fastq
+#Trim Illumina adapters with cutadapt
+#####################################
+#Alternatively, pairing the reads with PAIR seems to do a lot of quality filtering for you
+echo "Calling cutadapt to trim Illumina adapters..."
+#TODO: is this necessary? I expect not if I do paired-end merging first
+barcodes=$configdir/barcodes
+i5=AATGATACGGCGACCACCGAGATCTACAC_BARCODE_ACACTCTTTCCCTACACGACGCTCTTCCGATCT
+i7=GATCGGAAGAGCACACGTCTGAACTCCAGTCAC_BARCODE_TCGTATGCCGTCTTCTGCTTG
+#This will (primitively)read in barcodes from config file
+#config file must be in proper format
+#sample forward reverse
+#lines can be commented with " (double quote)
 
-#use cutadapt to remove Illumina adapters
-#Read 1 - MEL
-cutadapt -g ^AGATCGGAAGAGCACACGTCTGAACTCCAGTCACcttgtaATCTCGTATGCCGTCTTCTGCTTG \
--g GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
--e 0.10 -O 10 --untrimmed-output=MEL_R1_untrim.fastq MEL_R1.fastq.gz -o MEL_R1_trim.fastq
-#Read 2 - MEL
-cutadapt -b AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT \
--e 0.1 -O 10 -m 30 --untrimmed-output=MEL_R2_untrim.fastq MEL_R2.fastq \
--o MEL_R2_trimL30.fastq
-#Read 1 - PWS
-cutadapt -g ^AGATCGGAAGAGCACACGTCTGAACTCCAGTCACgccaatATCTCGTATGCCGTCTTCTGCTTG \
--g GATCGGAAGAGCACACGTCTGAACTCCAGTCACgccaatATCTCGTATGCCGTCTTCTGCTTG \
--e 0.10 -O 10 --untrimmed-output=PWS_R1_untrim.fastq PWS_R1.fastq -o PWS_R1_trim.fastq
-#Read 2 - PWS
-cutadapt -b AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT \
--e 0.1 -O 10 -m 30 --untrimmed-output=PWS_R2_untrim.fastq PWS_R2.fastq \
--o PWS_R2_trimL30.fastq
+#B0rk if cannot read barcodes file
+#TODO: user can enter barcodes file location
+if [ ! -e $barcodes ]
+then
+  echo "Barcodes file not found"
+  exit 1
+fi
+
+#Read barcode file, line by line
+while read sample fwd rvs
+do
+  #putting the ^# pattern right in code effs up syntax
+  #highlighting in vi, so we store it in this variable
+  comment="^#" 
+  if [[ ! $sample =~ $comment ]]
+  then
+    #get forward and reverse adapters, with appropriate indices
+    #we leave the indices lowercase, for fun and legibility
+    forward=${i5/_BARCODE_/$(echo $fwd | tr A-Z a-z)}
+    reverse=${i7/_BARCODE_/$(echo $rvs | tr A-Z a-z)}
+
+    #setup filenames
+    fwd_fastq=$(echo $fastqdir/*_${sample}_*_R1_*.fastq.gz)
+    fwd_fastq_trim=$(basename $fwd_fastq .fastq.gz)_trim.fastq.gz
+    fwd_fastq_untrim=$(basename $fwd_fastq .fastq.gz)_untrim.fastq.gz
+    rvs_fastq=$(echo $fastqdir/*_${sample}_*_R2_*.fastq.gz)
+    rvs_fastq_trim=$(basename $rvs_fastq .fastq.gz)_trim.fastq.gz
+    rvs_fastq_untrim=$(basename $rvs_fastq .fastq.gz)_untrim.fastq.gz
+    
+    #run cutadapt
+    #options:
+    #-O 10: minimum overlap length
+    #-a forward adapter
+    #-A reverse adapter
+    #-o, -p trimmed forward/reverse output file
+    #--untrimmed(-paired?)-output untrimmed output files
+    $sysutil/cutadapt \
+      -O 10 \
+      -a $forward \
+      -A $reverse \
+      -o $outputdir/$fwd_fastq_trim \
+      -p $outputdir/$rvs_fastq_trim \
+      --untrimmed-output=$outputdir/$fwd_fastq_untrim \
+      --untrimmed-paired-output=$outputdir/$rvs_fastq_untrim \
+      $fwd_fastq $rvs_fastq   #input fastq files
+  fi
+done < $barcodes
+
+
+#TO THIS POINT
+echo "At the current end. Out"; exit 0
+
+#example:
+#--------------------------------------------------
+# #Read 1 - MEL
+# cutadapt -g ^AGATCGGAAGAGCACACGTCTGAACTCCAGTCACcttgtaATCTCGTATGCCGTCTTCTGCTTG \
+# -g GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
+# -e 0.10 -O 10 --untrimmed-output=MEL_R1_untrim.fastq MEL_R1.fastq.gz -o MEL_R1_trim.fastq
+#-------------------------------------------------- 
 
 #post-adapter cleaning concatenating
 #concatenate R2 untrimmed reads + trimmed reads
@@ -844,4 +932,33 @@ perl -ne 'if(/^>(\S+)/){$c=$i{$1}}$c?print:chomp;$i{$_}=1 if @ARGV' sigContigs.i
 
 
 
+######Commented-out stuff from Jon's pipeline moved down here###########
 
+#unzip tar.gz
+#tar -zxvf Project_Jon_Whitney
+#gunzip *.fastq.gz   #unzip all sequences with .gz
+
+#concatenate files (if each read set was parsed into multiple files, e.g., if more than 4 million reads on GAIIx)
+#cat MEL_CTTGTA_L005_R1_00*.fastq > MEL_R1.fastq
+#cat MEL_CTTGTA_L005_R2_00*.fastq > MEL_R2.fastq
+#cat PW5_GCCAAT_L005_R1_00*.fastq > PWS_R1.fastq
+#cat PW5_GCCAAT_L005_R2_00*.fastq > PWS_R2.fastq
+#/home/mahdi/programs/FastQC/fastqc  MEL_R1.fastq
+#/home/mahdi/programs/FastQC/fastqc  PWS_R1.fastq
+#/home/mahdi/programs/FastQC/fastqc  MEL_R2.fastq
+#/home/mahdi/programs/FastQC/fastqc  PWS_R2.fastq
+#cutadapt stuff:
+#Read 2 - MEL
+#--------------------------------------------------
+# cutadapt -b AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT \
+# -e 0.1 -O 10 -m 30 --untrimmed-output=MEL_R2_untrim.fastq MEL_R2.fastq \
+# -o MEL_R2_trimL30.fastq
+# #Read 1 - PWS
+# cutadapt -g ^AGATCGGAAGAGCACACGTCTGAACTCCAGTCACgccaatATCTCGTATGCCGTCTTCTGCTTG \
+# -g GATCGGAAGAGCACACGTCTGAACTCCAGTCACgccaatATCTCGTATGCCGTCTTCTGCTTG \
+# -e 0.10 -O 10 --untrimmed-output=PWS_R1_untrim.fastq PWS_R1.fastq -o PWS_R1_trim.fastq
+# #Read 2 - PWS
+# cutadapt -b AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT \
+# -e 0.1 -O 10 -m 30 --untrimmed-output=PWS_R2_untrim.fastq PWS_R2.fastq \
+# -o PWS_R2_trimL30.fastq
+#-------------------------------------------------- 
