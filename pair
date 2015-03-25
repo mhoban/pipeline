@@ -11,7 +11,11 @@ do
   -n 33 \
   -t 33 \
   -q 10 \
-  -j 20  #>> merged/pear.log 2>&1
+  -j 2 \
+   -u 0 \
+   -m 550 \
+   -y 1g
+   
 done
 
 
