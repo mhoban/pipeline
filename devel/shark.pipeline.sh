@@ -2,9 +2,11 @@
 
 #Notes/Questions
 #cutadapt: why does the R2 read have the -m 30 otions set, but the R1 read doesn't?
+#sample stats: How did you generate these? (esp "reads starting with cut site")
 
 #Dependencies managed by homebrew:
 #fastqc
+#fastx_toolki
 
 #Dependencies installed manually
 #cutadapt (installed via python pip)
@@ -21,26 +23,50 @@ fastqdir=$datadir/sample.fastq/           #directory where raw fastq files are s
                                           #format *_SAMPLEID_*_R1_*.fasta.gz/*_SAMPLEID_*_R2_*.fasta.gz
 #working directories:
 outputdir=$datadir/output
+working_dir=$fastqdir
 
 
 #executable directories:
 sysutil=/usr/local/bin                    #utility binary directory (systemwide)
 locutil=$basedir/bin                      #utility binary directory (locally installed)
 ########################################################################################
-
+#Pipeline-specific config
+#
+#These variables will tell fastx toolkit to filter entire reads that
+#do not have a quality score of at least 20 in 90% of bases
+min_quality=20
+quality_percent=90
+#
+# What files are we currently dealing with
+working_files=*.fastq.gz
+#Have our reads been paired?
+paired=false
+########################################################################################
 #setup stuff:
 mkdir -p $outputdir       #create working output directory
 
 function ask {
-  read -s -n 1 -r -p "$1" yn; echo
+  read -s -n 1 -r -p "$1 " yn; echo
   if [[ $yn =~ ^[Yy]$ ]]
   then
     return 0
   else
-    return 1
+    if [[ $2 -eq 1 ]]; then [[ $yn =~ ^[Nn]$ ]] && return 1 || return 0;
+    else return 1; fi
   fi
 }
 
+function pause {
+  prompt=$1
+  if [[ "$prompt" == "" ]]; then prompt="Press any key to continue: "; fi
+  read -s -n 1 -r -p "$prompt "; echo
+}
+
+function is_zipped {
+  if [[ -r $1 ]]; then
+    return $(file $1 | grep -q 'gzip')
+  else return 1; fi
+}
 
 
 ############  Prepare REFERENCE GENOME #################
@@ -56,178 +82,142 @@ if ask "Generate initial FastQC report? [y/N]"
 then
   mkdir -p $outputdir/QC
   echo "Generating FastQC reports..."
-  $sysutil/fastqc -o $outputdir/QC $fastqdir/*.fastq.gz
+  $sysutil/fastqc -o $outputdir/QC $working_dir/$working_files
+  if ask "Launch browser to view QC reports? [y/N]"; then
+    echo "<html><body>" > $outputdir/QC/index.html
+    for html in $outputdir/QC/*_fastqc.html; do
+      echo "<a href=\"$html\">$(basename $html)</a><br>" >> $outputdir/QC/index.html
+    done
+    echo "</html></body>" >> $outputdir/QC/index.html
+    open $outputdir/QC/index.html
+    pause
+  fi
 fi
 
 #Trim Illumina adapters with cutadapt
 #####################################
 #Alternatively, pairing the reads with PAIR seems to do a lot of quality filtering for you
-echo "Calling cutadapt to trim Illumina adapters..."
 #TODO: is this necessary? I expect not if I do paired-end merging first
-barcodes=$configdir/barcodes
-i5=AATGATACGGCGACCACCGAGATCTACAC_BARCODE_ACACTCTTTCCCTACACGACGCTCTTCCGATCT
-i7=GATCGGAAGAGCACACGTCTGAACTCCAGTCAC_BARCODE_TCGTATGCCGTCTTCTGCTTG
-#This will (primitively)read in barcodes from config file
-#config file must be in proper format
-#sample forward reverse
-#lines can be commented with " (double quote)
-
-#B0rk if cannot read barcodes file
-#TODO: user can enter barcodes file location
-if [ ! -e $barcodes ]
+if ask "Attempt to trim illumina adapters using cutadapt? [y/N]"
 then
-  echo "Barcodes file not found"
-  exit 1
+  echo "Calling cutadapt to trim Illumina adapters..."
+  working_files=*_R1_*.fastq.gz
+
+  #Turns out I can pass the same stuff to each file
+  #I don't have to care about the barcodes
+  #barcodes=$configdir/barcodes
+  fwd_adapt=AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC
+  rvs_adapt=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT
+  for fq in $working_dir/$working_files
+  do
+    #Setup filenames
+    fq_f=fq             #forward read file
+    fq_r=${fq_f/R1/R2}  #reverse read file
+
+    fq_f_trim=$(basename $fq_f .fastq.gz)_trim.fastq.gz       #trimmed forward reads
+    fq_f_untrim=$(basename $fq_f .fastq.gz)_untrim.fastq.gz   #untrimmed forward reads
+    fq_r_trim=$(basename $fq_r .fastq.gz)_trim.fastq.gz       #trimmed reverse reads
+    fq_r_untrim=$(basename $fq_r .fastq.gz)_untrim.fastq.gz   #untrimmed reverse reads
+
+    #pass all this info to cutadapt
+    $sysutil/cutadapt \
+      -a $fwd_adapt \
+      -A $rvs_adapt \
+      -o $outputdir/$fq_f_trim \
+      -p $outputdir/$fq_r_trim \
+      --untrimmed-output $outputdir/$fq_f_untrim \
+      --untrimmed-paired-output $outputdir/$fq_r_untrim \
+      $fq_f $fq_r
+    
+  done
+  #Set working fileset to adapter-trimmed fastq files
+  working_files=*_trim.fastq.gz
 fi
 
-#Read barcode file, line by line
-while read sample fwd rvs
-do
-  #putting the ^# pattern right in code effs up syntax
-  #highlighting in vi, so we store it in this variable
-  comment="^#" 
-  if [[ ! $sample =~ $comment ]]
-  then
-    #get forward and reverse adapters, with appropriate indices
-    #we leave the indices lowercase, for fun and legibility
-    forward=${i5/_BARCODE_/$(echo $fwd | tr A-Z a-z)}
-    reverse=${i7/_BARCODE_/$(echo $rvs | tr A-Z a-z)}
+######################################################
 
-    #setup filenames
-    fwd_fastq=$(echo $fastqdir/*_${sample}_*_R1_*.fastq.gz)
-    fwd_fastq_trim=$(basename $fwd_fastq .fastq.gz)_trim.fastq.gz
-    fwd_fastq_untrim=$(basename $fwd_fastq .fastq.gz)_untrim.fastq.gz
-    rvs_fastq=$(echo $fastqdir/*_${sample}_*_R2_*.fastq.gz)
-    rvs_fastq_trim=$(basename $rvs_fastq .fastq.gz)_trim.fastq.gz
-    rvs_fastq_untrim=$(basename $rvs_fastq .fastq.gz)_untrim.fastq.gz
-    
-    #run cutadapt
-    #options:
-    #-O 10: minimum overlap length
-    #-a forward adapter
-    #-A reverse adapter
-    #-o, -p trimmed forward/reverse output file
-    #--untrimmed(-paired?)-output untrimmed output files
-    $sysutil/cutadapt \
-      -O 10 \
-      -a $forward \
-      -A $reverse \
-      -o $outputdir/$fwd_fastq_trim \
-      -p $outputdir/$rvs_fastq_trim \
-      --untrimmed-output=$outputdir/$fwd_fastq_untrim \
-      --untrimmed-paired-output=$outputdir/$rvs_fastq_untrim \
-      $fwd_fastq $rvs_fastq   #input fastq files
-  fi
-done < $barcodes
+#   Paired-end merging with PEAR
+######################################################
+if ask "Attempt to merge paired reads with PEAR? [y/N]"
+then
+  echo "Merging paired-end reads..."
 
+  mkdir -p $outputdir
+  working_files=*_R1_*.fastq.gz
+  for fq in $working_dir/$working_files
+  do
+    #PEAR options
+    #-n 33: minimum assembly length 33
+    #-t 33: minimum trip length 33
+    #-q 10: minimum quality score 10
+    #-j 2: set number of threads (processors)
+    #-u 0: disallow uncalled bases (throw out N's)
+    #-m 550: maximum length of reads
+    #-y 1g: use 1G of memory
+    pear -f $fq \
+      -r ${fq/R1/R2} \
+      -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
+      -n 33 \
+      -t 33 \
+      -q 10 \
+      -j 2 \
+      -u 0 \
+      -m 550 \
+      -y 1g
+  done
+  #Set working fileset to assembled read files
+  working_files=*_merged_*.assembled.fastq
+  #Remember that our reads have been merged
+  paired=true
+fi
 
-#TO THIS POINT
-echo "At the current end. Out"; exit 0
+#Switch working directory to location of proccessed files
+working_dir=$outputdir
 
-#example:
-#--------------------------------------------------
-# #Read 1 - MEL
-# cutadapt -g ^AGATCGGAAGAGCACACGTCTGAACTCCAGTCACcttgtaATCTCGTATGCCGTCTTCTGCTTG \
-# -g GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
-# -e 0.10 -O 10 --untrimmed-output=MEL_R1_untrim.fastq MEL_R1.fastq.gz -o MEL_R1_trim.fastq
-#-------------------------------------------------- 
-
-#post-adapter cleaning concatenating
-#concatenate R2 untrimmed reads + trimmed reads
-cat MEL_R2_untrim.fastq MEL_R2_trimL30.fastq > MEL_R2_clean.fastq 
-cat PWS_R2_untrim.fastq PWS_R2_trimL30.fastq > PWS_R2_clean.fastq 
-
-
-
+echo "Quality-filtering reads:"
+echo "Discarding whole reads with <90% of bases having quality score >= 20..."
+pause
 # Filtering reads based on % quality (filters out poor quality reads overall)
 # -q 20 -p 90 means it filters whole reads that do not have a Qscore of 20 in 90% of bases
-/home/mahdi/programs/fastx/fastq_quality_filter -q 20 -p 90 -z -v -i  MEL_R1.fastq -o MEL_R1_QualFilt20.fastq -Q 33
-/home/mahdi/programs/fastx/fastq_quality_filter -q 20 -p 90 -z -v -i  MEL_R2.fastq -o MEL_R2_QualFilt20.fastq -Q 33
-/home/mahdi/programs/fastx/fastq_quality_filter -q 20 -p 90 -z -v -i  PWS_R1.fastq -o PWS_R1_QualFilt20.fastq -Q 33
-/home/mahdi/programs/fastx/fastq_quality_filter -q 20 -p 90 -z -v -i  PWS_R2.fastq -o PWS_R2_QualFilt20.fastq -Q 33
-
-#Sample Stats on Hawkfish Reads
-###### Initial number of sequences in ALL_R1:            34,195,059
-###### Num seqs after filtering in    ALL_R1_QualFilt20: 28,237,739 (82.5%)
-###### Initial number of sequences in All_R2:            34,195,059
-###### Num seqs after filtering in    ALL_R2_QualFilt20: 16,481,952 (48.2%) 
-#NOTE: last 50bases of read 2 are low quality, so first need to quality trim then quality filter
- 
-###### Breakdown by individuals:
-### MEL R1 Before:    17,432,597
-###        After-q20: 17,415,442
-### MEL R2 Before:    17,432,597
-###        After-q20:  8,590,968
-### PWS R1 Before:    16,762,462
-###        After-q20: 13,770,990
-### PWS R2 Before:    16,762,462
-###        After-q20:  7,890,984
-
-####### Reads starting with cut site (avg ~ 75% start with cut site)
-### MEL R1 Before:    17,432,597
-### start w/ GATC:    12,582,727 (72%)
-### MEL R2 Before:    17,432,597
-### start w/ GATC:    13,678,349 (78%)
-### PWS R1 Before:    16,762,462
-### start w/ GATC:    12,464,395 (74%)
-### PWS R2 Before:    16,762,462
-### start w/ GATC:    13,406,845 (80%)
+# uses $min_quality and $quality_percent variables
+for fq in $working_dir/$working_files
+do
+  barefile=${fq##*/} #similar to $(basename fq)
+  barefile=${barefile%#.*} #does what $(basename fq .ext) doe for any extension
+  #Make sure we are transparent to whether the fastq file is gzipped or not
+  #if we used PEAR, they're not zipped, otherwise they probably are
+  #the product of this section will be gzipped fastq files with "_Qual20" tagged on the end
+  if ! is_zipped $fq; then
+    $sysutil/fastq_quality_filter \
+      -q $min_quality \
+      -p $quality_percent \
+      -z -v \
+      -i $fq \
+      -o $(barefile)_Qual20.fastq.gz
+  else
+    gzcat $fq | $sysutil/fastq_quality_filter \
+      -q $min_quality \
+      -p $quality_percent \
+      -z -v \
+      -o $(barefile)_Qual20.fastq.gz
+  fi
+done
 
 
 
-#Quality Trimming
+
+#Quality Trimming - may trim low quality ends if necessary
 #if there are poor quality ends you can trim them off (e.g., -t 20 -l 50 says if you see a Qscore < 20 cut off everything 3')
 #and if the resulting fragment is < 50 bases then throw it out
-/home/jw2/programs/fastx/fastq_quality_trimmer -t 20 -l 50 -v -i MEL_R1_untrim.fastq -o MEL_R1_cleanQualTrim.fastq -Q 33
-/home/jw2/programs/fastx/fastq_quality_trimmer -t 20 -l 50 -v -i PWS_R1_untrim.fastq -o PWS_R1_cleanQualTrim.fastq -Q 33
-/home/jw2/programs/fastx/fastq_quality_trimmer -t 20 -l 50 -v -i MEL_R2_clean.fastq -o MEL_R2_cleanQualTrim.fastq -Q 33
-/home/jw2/programs/fastx/fastq_quality_trimmer -t 20 -l 50 -v -i PWS_R2_clean.fastq -o PWS_R2_cleanQualTrim.fastq -Q 33
-
-
-# Retry filtering after trimming off poor quality ends 
-/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i  MEL_R1_cleanQualTrim.fastq -o MEL_R1_cleanQualTrimFilt.fastq -Q 33
-/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i  PWS_R1_cleanQualTrim.fastq -o PWS_R1_cleanQualTrimFilt.fastq -Q 33
-/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i  MEL_R2_cleanQualTrim.fastq -o MEL_R2_cleanQualTrimFilt.fastq -Q 33
-/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i  PWS_R2_cleanQualTrim.fastq -o PWS_R2_cleanQualTrimFilt.fastq -Q 33
-
-#Samples Stats from Hawkfish
-###### Including short fragments (not yet length filtered)
-### MEL R1 Before:      17,423,468
-###        trim3' >50b: 17,098,084  (-1%)
-###        q20,p90:     16,325,778  (-5%) -6% total 
-
-### MEL R2 Before:      17,431,143
-###        trim3' >50b: 16,857,303  (-3%)
-###        q20,p90:     15,761,208  (-6%) -10% total 
-
-### PWS R1 Before:      16,754,829
-###        trim3' >50b: 16,417,709  (-2%)
-###        q20,p90:     15,643,187  (-4%)  -6% total
-
-### PWS R2 Before:      16,760,974
-###        trim3' >50b: 16,131,675  (-3%)
-###        q20,p90:     14,979,441  (-7%)  -10% total
-
-
-# make compressed gz for Filtering Unpaired Reads (input requires .gz)
-gzip -c -1 -v MEL_R1_cleanQualTrim.fastq > MEL_R1_cleanQualTrim.fastq.gz
-gzip -c -1 -v MEL_R2_cleanQualTrim.fastq > MEL_R2_cleanQualTrim.fastq.gz
-gzip -c -1 -v PWS_R1_cleanQualTrim.fastq > PWS_R1_cleanQualTrim.fastq.gz
-gzip -c -1 -v PWS_R2_cleanQualTrim.fastq > PWS_R2_cleanQualTrim.fastq.gz
-
-
-#run FastQC again on cleaned/trimmed/filtered reads to compare with raw reads 
-/home/mahdi/programs/FastQC/fastqc  MEL_R1_cleanQualTrim.fastq.gz
-/home/mahdi/programs/FastQC/fastqc  PWS_R1_cleanQualTrim.fastq.gz
-/home/mahdi/programs/FastQC/fastqc  MEL_R2_cleanQualTrim.fastq.gz
-/home/mahdi/programs/FastQC/fastqc  PWS_R2_cleanQualTrim.fastq.gz
-
+#/home/jw2/programs/fastx/fastq_quality_trimmer -t 20 -l 50 -v -i MEL_R1_untrim.fastq -o MEL_R1_cleanQualTrim.fastq -Q 33
 
 ############# Filtering Unpaired Sequences #######################
+#This is unneccessary if we've paired with PEAR
+#If we have unpaired reads, we might have had to do this before calling cutadapt
 #usage: Perl filterNonPairedReads.pl <output_prefix> <read_1.fastq.gz> <read_2.fastq.gz>
 #requires reads to be compressed in .gz format
-perl /home/jw2/scripts/filterNonPairedReads.pl MEL_filtered_cQTF MEL_R1_cleanQualTrimFilt.fastq.gz MEL_R2_cleanQualTrimFilt.fastq.gz
-perl /home/jw2/scripts/filterNonPairedReads.pl PWS_filtered_cQTF PWS_R1_cleanQualTrimFilt.fastq.gz PWS_R2_cleanQualTrimFilt.fastq.gz
+#perl /home/jw2/scripts/filterNonPairedReads.pl MEL_filtered_cQTF MEL_R1_cleanQualTrimFilt.fastq.gz MEL_R2_cleanQualTrimFilt.fastq.gz
+
 
 
 #Sample Stats from Hawkfish
@@ -933,6 +923,12 @@ perl -ne 'if(/^>(\S+)/){$c=$i{$1}}$c?print:chomp;$i{$_}=1 if @ARGV' sigContigs.i
 
 
 ######Commented-out stuff from Jon's pipeline moved down here###########
+#--------------------------------------------------
+# #post-adapter cleaning concatenating
+# #concatenate R2 untrimmed reads + trimmed reads
+# cat MEL_R2_untrim.fastq MEL_R2_trimL30.fastq > MEL_R2_clean.fastq 
+# cat PWS_R2_untrim.fastq PWS_R2_trimL30.fastq > PWS_R2_clean.fastq 
+#-------------------------------------------------- 
 
 #unzip tar.gz
 #tar -zxvf Project_Jon_Whitney
@@ -962,3 +958,87 @@ perl -ne 'if(/^>(\S+)/){$c=$i{$1}}$c?print:chomp;$i{$_}=1 if @ARGV' sigContigs.i
 # -e 0.1 -O 10 -m 30 --untrimmed-output=PWS_R2_untrim.fastq PWS_R2.fastq \
 # -o PWS_R2_trimL30.fastq
 #-------------------------------------------------- 
+
+#The way I was initially tryin to use cutadapt
+  #--------------------------------------------------
+  #i5=AATGATACGGCGACCACCGAGATCTACAC_BARCODE_ACACTCTTTCCCTACACGACGCTCTTCCGATCT
+  #i7=GATCGGAAGAGCACACGTCTGAACTCCAGTCAC_BARCODE_TCGTATGCCGTCTTCTGCTTG
+  # #This will (primitively)read in barcodes from config file
+  # #config file must be in proper format
+  # #sample forward reverse
+  # #lines can be commented with " (double quote)
+  # 
+  # #B0rk if cannot read barcodes file
+  # #TODO: user can enter barcodes file location
+  # if [ ! -f $barcodes ]
+  # then
+  #   echo "Barcodes file not found"
+  #   exit 1
+  # fi
+  # 
+  # #Read barcode file, line by line
+  # while read sample fwd rvs
+  # do
+  #   #putting the ^# pattern right in code effs up syntax
+  #   #highlighting in vi, so we store it in this variable
+  #   comment="^#" 
+  #   if [[ ! $sample =~ $comment ]]
+  #   then
+  #     #get forward and reverse adapters, with appropriate indices
+  #     #we leave the indices lowercase, for fun and legibility
+  #     forward=${i5/_BARCODE_/$(echo $fwd | tr A-Z a-z)}
+  #     reverse=${i7/_BARCODE_/$(echo $rvs | tr A-Z a-z)}
+  # 
+  #     #setup filenames
+  #     fwd_fastq=$(echo $fastqdir/*_${sample}_*_R1_*.fastq.gz)
+  #     fwd_fastq_trim=$(basename $fwd_fastq .fastq.gz)_trim.fastq.gz
+  #     fwd_fastq_untrim=$(basename $fwd_fastq .fastq.gz)_untrim.fastq.gz
+  #     rvs_fastq=$(echo $fastqdir/*_${sample}_*_R2_*.fastq.gz)
+  #     rvs_fastq_trim=$(basename $rvs_fastq .fastq.gz)_trim.fastq.gz
+  #     rvs_fastq_untrim=$(basename $rvs_fastq .fastq.gz)_untrim.fastq.gz
+  #     
+  #     #run cutadapt
+  #     #options:
+  #     #-O 10: minimum overlap length
+  #     #-a forward adapter
+  #     #-A reverse adapter
+  #     #-o, -p trimmed forward/reverse output file
+  #     #--untrimmed(-paired?)-output untrimmed output files
+  #     $sysutil/cutadapt \
+  #       -O 10 \
+  #       -a $forward \
+  #       -A $reverse \
+  #       -o $outputdir/$fwd_fastq_trim \
+  #       -p $outputdir/$rvs_fastq_trim \
+  #       --untrimmed-output=$outputdir/$fwd_fastq_untrim \
+  #       --untrimmed-paired-output=$outputdir/$rvs_fastq_untrim \
+  #       $fwd_fastq $rvs_fastq   #input fastq files
+  #   fi
+  # done < $barcodes
+  #-------------------------------------------------- 
+#Sample Stats on Hawkfish Reads
+###### Initial number of sequences in ALL_R1:            34,195,059
+###### Num seqs after filtering in    ALL_R1_QualFilt20: 28,237,739 (82.5%)
+###### Initial number of sequences in All_R2:            34,195,059
+###### Num seqs after filtering in    ALL_R2_QualFilt20: 16,481,952 (48.2%) 
+#NOTE: last 50bases of read 2 are low quality, so first need to quality trim then quality filter
+ 
+###### Breakdown by individuals:
+### MEL R1 Before:    17,432,597
+###        After-q20: 17,415,442
+### MEL R2 Before:    17,432,597
+###        After-q20:  8,590,968
+### PWS R1 Before:    16,762,462
+###        After-q20: 13,770,990
+### PWS R2 Before:    16,762,462
+###        After-q20:  7,890,984
+
+####### Reads starting with cut site (avg ~ 75% start with cut site)
+### MEL R1 Before:    17,432,597
+### start w/ GATC:    12,582,727 (72%)
+### MEL R2 Before:    17,432,597
+### start w/ GATC:    13,678,349 (78%)
+### PWS R1 Before:    16,762,462
+### start w/ GATC:    12,464,395 (74%)
+### PWS R2 Before:    16,762,462
+### start w/ GATC:    13,406,845 (80%)

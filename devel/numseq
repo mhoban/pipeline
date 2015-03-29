@@ -9,4 +9,5 @@ function is_zipped {
 cmd=cat
 is_zipped $1 && cmd=gzcat || cmd=cat
 
-$cmd $1 | wc -l | awk '{print $1/4}' | xargs printf "%'d"
+#$cmd $1 | wc -l | awk '{print $1/4}' | xargs printf "%'d"
+$cmd $1 | wc -l | awk '{printf "%'"'"'d", $1/4}'
