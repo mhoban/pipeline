@@ -1,2 +1,2 @@
 # pipeline
-Analysis next-generation (Illumina) sequence data consisting of pooled samples
+Analysis pipeline for next-generation (Illumina) sequence data consisting of pooled samples
