@@ -7,9 +7,11 @@
 #Dependencies managed by homebrew:
 #fastqc
 #fastx_toolki
+#rainbow
 
 #Dependencies installed manually
 #cutadapt (installed via python pip)
+#PEAR (installed manually, lives within pipeline tree)
 
 
 #General setup variables
@@ -154,7 +156,7 @@ then
     #-u 0: disallow uncalled bases (throw out N's)
     #-m 550: maximum length of reads
     #-y 1g: use 1G of memory
-    pear -f $fq \
+    $locutil/pear -f $fq \
       -r ${fq/R1/R2} \
       -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
       -n 33 \
@@ -187,20 +189,12 @@ do
   #Make sure we are transparent to whether the fastq file is gzipped or not
   #if we used PEAR, they're not zipped, otherwise they probably are
   #the product of this section will be gzipped fastq files with "_Qual20" tagged on the end
-  if ! is_zipped $fq; then
-    $sysutil/fastq_quality_filter \
-      -q $min_quality \
-      -p $quality_percent \
-      -z -v \
-      -i $fq \
-      -o $(barefile)_Qual20.fastq.gz
-  else
-    gzcat $fq | $sysutil/fastq_quality_filter \
-      -q $min_quality \
-      -p $quality_percent \
-      -z -v \
-      -o $(barefile)_Qual20.fastq.gz
-  fi
+  is_zipped $fq && catcmd=gzcat || catcmd=cat
+  $catcmd $fq | $sysutil/fastq_quality_filter \
+    -q $min_quality \
+    -p $quality_percent \
+    -z -v \
+    -o $(barefile)_Qual20.fastq.gz
 done
 
 
@@ -212,157 +206,18 @@ done
 #/home/jw2/programs/fastx/fastq_quality_trimmer -t 20 -l 50 -v -i MEL_R1_untrim.fastq -o MEL_R1_cleanQualTrim.fastq -Q 33
 
 ############# Filtering Unpaired Sequences #######################
+#TODO: Make this work if we use cutadapt first (although I'm probably not doing that)
 #This is unneccessary if we've paired with PEAR
+if ! $paired
+then
 #If we have unpaired reads, we might have had to do this before calling cutadapt
 #usage: Perl filterNonPairedReads.pl <output_prefix> <read_1.fastq.gz> <read_2.fastq.gz>
 #requires reads to be compressed in .gz format
 #perl /home/jw2/scripts/filterNonPairedReads.pl MEL_filtered_cQTF MEL_R1_cleanQualTrimFilt.fastq.gz MEL_R2_cleanQualTrimFilt.fastq.gz
-
-
-
-#Sample Stats from Hawkfish
-##### number of sequences after filtering: adapter cut, 3'trim (q20,l>50), qual filt (q20,p90)
-### MEL  
-### Initial #:                      34,865,194
-### Adapter cleaned:                34,854,611
-### Passed QC, Qtrim+q20p90:        32,086,986
-### In pairs:                       30,503,926
-### Singletons:                      1,583,060 (95% of reads passing QC are still paired)
-
-### PWS  
-### Initial reads:                  33,524,924
-### Adapter clean:                  33,515,803
-### Passed QC, Qtrim+q20p90:        30,622,628
-### In pairs:                       29,006,834 
-### Singletons:                      1,615,794 (95% of reads passing QC still paired) 
-
-#Quality Control on Mated Pairs
-#MEL_filtered_cQTF.pair1.fastq
-#No. reads pair1:   15,251,963
-#No. reads pair2:   15,251,963
-#No. reads start w/ AGATC:  9225
-#No. reads start w/ GATC:  11,014,605  (72%)
-# reads with Ns : 17,746 read1  and 6,494 read2
-
-## Alternative to filtering Orphaned Reads  using FLEXBAR
-flexbar -r read1.fastq -p read2.fastq -f i1.8
-
-perl flexbar -r MEL_R1_untrim.fastq -p MEL_R2_clean.fastq -f i1.8 -n 12 -q 20 -m 30 -u 3 -j -s
-
--n   # threads to employ
--r   #read1
--p   #read2
--f   #format (sanger, illumina, etc)
--q   #trim 3'end until specific q score is reached
--m   #min read length to remain after trimming
--u   #max number of Ns allowed (default = 0)
--j   #generate histogram of read lengths
--s   #write orphaned reads to separate file
-
-
-
-### Alternative to filtering using TrimGalore
-#written in perl so all commands must be preceded by perl
-perl ~/programs/bin/trim_galore  -v
-
---phred33  #sanger/Illumina 1.9+ (default)
--q        #quality filter (default = 20)
--s        #stringency for overlap (-O setting in cutadapt)
--e        #error rate (default: 0.1)
---paired  #maintains paired-reads
---length  #keep sequences above set length
---retain_unpaired  #keeps orphaned reads
---dont_gzip
--r1     #length cutoff to retain read1
--r2     #length cutoff to retain read2
-
-
-perl ~/programs/bin/trim_galore --phred33 --paired --length 70 --retain_unpaired --dont_gzip \
-    -a GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
-    -a2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT   \
-    --stringency 10 -e 0.1 -q 10 -r1 75 -r2 75 \
-    MEL_1.fq MEL_2.fq
-
-#OUTPUT
-#Results are not as stringent as doing it doing it in cutadapt 
-
-
-#Run again for just mate-pairing function
-
-perl ~/programs/bin/trim_galore --phred33 --paired --length 30 --retain_unpaired --dont_gzip \
-    -a GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
-    -a2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT   \
-    --stringency 58 -e 0.1 -r1 75 -r2 50 -q 10 \
-    MEL_cQTF_1.fq MEL_cQTF_2.fq
-
-#OUTPUT
-#Input R1: 
-#Input R2: 
-#paired:   
-
-
-#Get length distribution of fastq
-cat MEL_cQTF_1.fq | perl -ne '$s=<>;<>;<>;chomp($s);print length($s)."\n";' | sort | uniq -c
-
-
-#Trim-galore on PWS
-perl ~/programs/bin/trim_galore --phred33 --paired --length 70 --retain_unpaired --dont_gzip \
-    -a GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
-    -a2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT   \
-    --stringency 10 -e 0.1 -q 10 -r1 75 -r2 75 \
-    PWS_1.fq PWS_2.fq
-
-# Maximum error rate: 10.00%
-#    No. of adapters: 1
-#    Processed reads:     16,762,462
-#    Processed bases:   1877395744 bp (1877.4 Mbp)
-#      Trimmed reads:        56679 (0.3%)
-#    Quality-trimmed:     96681268 bp (96.7 Mbp) (5.15% of total)
-#      Trimmed bases:      1463328 bp (1.5 Mbp) (0.08% of total)
-#    Too short reads:            0 (0.0% of processed reads)
-#     Too long reads:            0 (0.0% of processed reads)
-#         Total time:    435.31 s
-#      Time per read:      0.026 ms
-
-# Maximum error rate: 10.00%
-#    No. of adapters: 1
-#    Processed reads:     16,762,462
-#    Processed bases:   2531131762 bp (2531.1 Mbp)
-#      Trimmed reads:       176688 (1.1%)
-#    Quality-trimmed:    411056640 bp (411.1 Mbp) (16.24% of total)
-#      Trimmed bases:      5246140 bp (5.2 Mbp) (0.21% of total)
-#    Too short reads:            0 (0.0% of processed reads)
-#     Too long reads:            0 (0.0% of processed reads)
-#         Total time:    475.01 s
-#      Time per read:      0.028 ms
-
-# Total number of sequences analysed: 16762462
-
-# Number of sequence pairs removed: 1,507,301 (8.99%)
-
-#########################################################
-
-
-###### Alternative Filtering Method with Read 2s
-#wondering if extra long reads on read 2s are reason why 2x more read2s are filtered
-#testing to see if we truncate all R2 at 110 if we get around this issue
-#/home/jw2/programs/fastx/fastx_trimmer -l 110 -v -i MEL_R2_clean.fastq -o MEL_R2_cleanTrim110.fastq -Q 33
-#/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i MEL_R2_cleanTrim110.fastq -o MEL_R2_cleanTrim110QualFilt.fastq -Q 33  
-
-### MEL R2 Before:      17,431,143
-### Qualtrim + q20,p90: 15,761,208  (-10% total)
-### Trim110 + q20,p90:  14,326,930  (-17% total)
-
-#Process R1 differently to keep intact (same read length - for rainbow assembly)
-#/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i  MEL_R1_untrim.fastq -o MEL_R1_cleanQualFilt.fastq -Q 33
-
-### MEL R1 Before:          17,423,468
-### Qualtrim + q20,p90:     16,325,778  (-6% total)
-### q20,p90 w/out qualtrim: 14,464,798  (-16% total)
-
-#### RESULT: --> filtering by quality q20,p90 without trimming poor quality 3' ends results in an additional
-#loss of 10% of reads (because we are throwing out reads with lower quality 3' ends).  Better to trim them
-
+  echo "Filtering out unpaired reads from forward and reverse fastq files..."
+  echo "Nothing actually happens here right now"
+  pause
+fi
 
 #### CONCLUSION
 #compared FastQC of QualTrimmed and QualFiltered of MEL_R1_clean.fastq (adapter cleaned) and the quality looks
@@ -372,24 +227,9 @@ perl ~/programs/bin/trim_galore --phred33 --paired --length 70 --retain_unpaired
 #As long as Quality is good, having more reads for assembly (longer contigs) and aligning (more coverage) is beneficial.
 
 
-### Alternative - try Mahdi's Combine PE 
-/home/jw2/scripts/fastqCombinePairedEnd.py
-
-#USAGE: python fastqCombinePairedEnd.py input1 input2 separator
-
-# input1 = LEFT  fastq file (R1)
-# input2 = RIGHT fastq file (R2)
-# separator = character that separates the name of the read from the part that
-#     describes if it goes on the left or right, usually with characters '1' or
-#     '2'.  The separator is often a space, but could be another character. A
-#     space is used by default.
-
-/home/jw2/scripts/fastqCombinePairedEnd.py MEL-cQTF_1.fastq MEL-cQTF_2.fastq _
-/home/jw2/scripts/fastqCombinePairedEnd.py PWS-cQTF_1.fastq PWS-cQTF_2.fastq _
-
 ######################################################################################################################## 
-################ RAINBOW
-######################################## 
+################ RAINBOW: create de novo assemblies
+######################################################################################################################## 
 #make de novo assembly with rainbow 
 #-m is number of mismatches allowed between two reads being compared for clustering (default = 4)
 #Rainbow Assembly with MEL_filtered50 reads, allow 6 mismatches (-m 6) and select best+read1
@@ -920,9 +760,12 @@ perl -ne 'if(/^>(\S+)/){$c=$i{$1}}$c?print:chomp;$i{$_}=1 if @ARGV' sigContigs.i
 
 
 
-
-
+######################################################################################################
+#BELOW HERE LIES JUNK (some useful notes)
+######################################################################################################
+######################################################################################################
 ######Commented-out stuff from Jon's pipeline moved down here###########
+######################################################################################################
 #--------------------------------------------------
 # #post-adapter cleaning concatenating
 # #concatenate R2 untrimmed reads + trimmed reads
@@ -1042,3 +885,102 @@ perl -ne 'if(/^>(\S+)/){$c=$i{$1}}$c?print:chomp;$i{$_}=1 if @ARGV' sigContigs.i
 ### start w/ GATC:    12,464,395 (74%)
 ### PWS R2 Before:    16,762,462
 ### start w/ GATC:    13,406,845 (80%)
+#--------------------------------------------------
+# ## Alternative to filtering Orphaned Reads  using FLEXBAR
+# flexbar -r read1.fastq -p read2.fastq -f i1.8
+# 
+# perl flexbar -r MEL_R1_untrim.fastq -p MEL_R2_clean.fastq -f i1.8 -n 12 -q 20 -m 30 -u 3 -j -s
+# 
+# -n   # threads to employ
+# -r   #read1
+# -p   #read2
+# -f   #format (sanger, illumina, etc)
+# -q   #trim 3'end until specific q score is reached
+# -m   #min read length to remain after trimming
+# -u   #max number of Ns allowed (default = 0)
+# -j   #generate histogram of read lengths
+# -s   #write orphaned reads to separate file
+#-------------------------------------------------- 
+
+
+
+#--------------------------------------------------
+# ### Alternative to filtering using TrimGalore
+# #written in perl so all commands must be preceded by perl
+# perl ~/programs/bin/trim_galore  -v
+# 
+# --phred33  #sanger/Illumina 1.9+ (default)
+# -q        #quality filter (default = 20)
+# -s        #stringency for overlap (-O setting in cutadapt)
+# -e        #error rate (default: 0.1)
+# --paired  #maintains paired-reads
+# --length  #keep sequences above set length
+# --retain_unpaired  #keeps orphaned reads
+# --dont_gzip
+# -r1     #length cutoff to retain read1
+# -r2     #length cutoff to retain read2
+# 
+# 
+# perl ~/programs/bin/trim_galore --phred33 --paired --length 70 --retain_unpaired --dont_gzip \
+#     -a GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
+#     -a2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT   \
+#     --stringency 10 -e 0.1 -q 10 -r1 75 -r2 75 \
+#     MEL_1.fq MEL_2.fq
+#-------------------------------------------------- 
+
+#OUTPUT
+#Results are not as stringent as doing it doing it in cutadapt 
+
+
+#Run again for just mate-pairing function
+
+#--------------------------------------------------
+# perl ~/programs/bin/trim_galore --phred33 --paired --length 30 --retain_unpaired --dont_gzip \
+#     -a GATCGGAAGAGCACACGTCTGAACTCCAGTCACCTTGTAATCTCGTATGCCGTCTTCTGCTTG \
+#     -a2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT   \
+#     --stringency 58 -e 0.1 -r1 75 -r2 50 -q 10 \
+#     MEL_cQTF_1.fq MEL_cQTF_2.fq
+#-------------------------------------------------- 
+
+#OUTPUT
+#Input R1: 
+#Input R2: 
+#paired:   
+#TODO: this perl one-liner gives sorted length distribution of fastq files
+#Get length distribution of fastq
+#cat <input_fastq> | perl -ne '$s=<>;<>;<>;chomp($s);print length($s)."\n";' | sort | uniq -c
+###### Alternative Filtering Method with Read 2s
+#wondering if extra long reads on read 2s are reason why 2x more read2s are filtered
+#testing to see if we truncate all R2 at 110 if we get around this issue
+#/home/jw2/programs/fastx/fastx_trimmer -l 110 -v -i MEL_R2_clean.fastq -o MEL_R2_cleanTrim110.fastq -Q 33
+#/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i MEL_R2_cleanTrim110.fastq -o MEL_R2_cleanTrim110QualFilt.fastq -Q 33  
+
+### MEL R2 Before:      17,431,143
+### Qualtrim + q20,p90: 15,761,208  (-10% total)
+### Trim110 + q20,p90:  14,326,930  (-17% total)
+
+#Process R1 differently to keep intact (same read length - for rainbow assembly)
+#/home/jw2/programs/fastx/fastq_quality_filter -q 20 -p 90 -v -i  MEL_R1_untrim.fastq -o MEL_R1_cleanQualFilt.fastq -Q 33
+
+### MEL R1 Before:          17,423,468
+### Qualtrim + q20,p90:     16,325,778  (-6% total)
+### q20,p90 w/out qualtrim: 14,464,798  (-16% total)
+
+#### RESULT: --> filtering by quality q20,p90 without trimming poor quality 3' ends results in an additional
+#loss of 10% of reads (because we are throwing out reads with lower quality 3' ends).  Better to trim them
+
+
+### Alternative - try Mahdi's Combine PE 
+#/home/jw2/scripts/fastqCombinePairedEnd.py
+
+#USAGE: python fastqCombinePairedEnd.py input1 input2 separator
+
+# input1 = LEFT  fastq file (R1)
+# input2 = RIGHT fastq file (R2)
+# separator = character that separates the name of the read from the part that
+#     describes if it goes on the left or right, usually with characters '1' or
+#     '2'.  The separator is often a space, but could be another character. A
+#     space is used by default.
+
+/home/jw2/scripts/fastqCombinePairedEnd.py MEL-cQTF_1.fastq MEL-cQTF_2.fastq _
+/home/jw2/scripts/fastqCombinePairedEnd.py PWS-cQTF_1.fastq PWS-cQTF_2.fastq _
