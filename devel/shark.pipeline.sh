@@ -7,11 +7,11 @@
 #Dependencies managed by homebrew:
 #fastqc
 #fastx_toolki
-#rainbow
 
-#Dependencies installed manually
+#Dependencies installed manually (unless otherwise noted, symlinked from bin/ to src/<project>)
 #cutadapt (installed via python pip)
 #PEAR (installed manually, lives within pipeline tree)
+#rainbow
 
 
 #General setup variables
@@ -110,6 +110,9 @@ then
   #barcodes=$configdir/barcodes
   fwd_adapt=AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC
   rvs_adapt=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT
+  #TODO:
+  #Trim Galore only trims 3' side
+  #modify it to include 5' side
   for fq in $working_dir/$working_files
   do
     #Setup filenames
@@ -768,6 +771,7 @@ perl -ne 'if(/^>(\S+)/){$c=$i{$1}}$c?print:chomp;$i{$_}=1 if @ARGV' sigContigs.i
 ######################################################################################################
 #--------------------------------------------------
 # #post-adapter cleaning concatenating
+#TODO: why this?
 # #concatenate R2 untrimmed reads + trimmed reads
 # cat MEL_R2_untrim.fastq MEL_R2_trimL30.fastq > MEL_R2_clean.fastq 
 # cat PWS_R2_untrim.fastq PWS_R2_trimL30.fastq > PWS_R2_clean.fastq 
