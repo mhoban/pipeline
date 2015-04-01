@@ -8,10 +8,11 @@
 #fastqc
 #fastx_toolki
 
-#Dependencies installed manually (unless otherwise noted, symlinked from bin/ to src/<project>)
+#Dependencies installed manually (unless otherwise noted, symlinked from $basedir/bin/ to $basedir/src/<project>)
 #cutadapt (installed via python pip)
-#PEAR (installed manually, lives within pipeline tree)
+#PEAR
 #rainbow
+#Trim Galore
 
 
 #General setup variables
@@ -46,28 +47,34 @@ paired=false
 ########################################################################################
 #setup stuff:
 mkdir -p $outputdir       #create working output directory
+source funx.sh
 
-function ask {
-  read -s -n 1 -r -p "$1 " yn; echo
-  if [[ $yn =~ ^[Yy]$ ]]
-  then
-    return 0
-  else
-    if [[ $2 -eq 1 ]]; then [[ $yn =~ ^[Nn]$ ]] && return 1 || return 0;
-    else return 1; fi
+function genQC() {
+  local qc=$1
+  local qcdir=$2
+  if [[ ! -d $qcdir ]]; then
+    mkdir -p $qcdir || return 1
   fi
-}
 
-function pause {
-  prompt=$1
-  if [[ "$prompt" == "" ]]; then prompt="Press any key to continue: "; fi
-  read -s -n 1 -r -p "$prompt "; echo
-}
+  shift; shift
 
-function is_zipped {
-  if [[ -r $1 ]]; then
-    return $(file $1 | grep -q 'gzip')
-  else return 1; fi
+  if [[ $qc == true ]]; then
+    # Call FastQC
+    $sysutil/fastqc -o $qcdir $@
+  fi
+
+  # Generate HTML index
+  echo "<html><body>" > $qcdir/index.html
+  for html in $qcdir/*_fastqc.html; do
+    echo "<a href=\"$html\">$(basename $html)</a><br>" >> $qcdir/index.html
+  done
+  echo "</html></body>" >> $qcdir/index.html
+
+  # Prompt to open browser
+  if ask "Launch browser to view QC reports? [y/N]"; then
+    open $qcdir/index.html
+    pause
+  fi
 }
 
 
@@ -80,155 +87,133 @@ function is_zipped {
 
 #Generate quality stats with fastqc
 #####################################
-if ask "Generate initial FastQC report? [y/N]"
+if ask "Generate initial FastQC reports? [y/N]"
 then
-  mkdir -p $outputdir/QC
-  echo "Generating FastQC reports..."
-  $sysutil/fastqc -o $outputdir/QC $working_dir/$working_files
-  if ask "Launch browser to view QC reports? [y/N]"; then
-    echo "<html><body>" > $outputdir/QC/index.html
-    for html in $outputdir/QC/*_fastqc.html; do
-      echo "<a href=\"$html\">$(basename $html)</a><br>" >> $outputdir/QC/index.html
-    done
-    echo "</html></body>" >> $outputdir/QC/index.html
-    open $outputdir/QC/index.html
-    pause
-  fi
+  genQC true $outputdir/QC $working_dir/$working_files
 fi
 
-#Trim Illumina adapters with cutadapt
-#####################################
-#Alternatively, pairing the reads with PAIR seems to do a lot of quality filtering for you
-#TODO: is this necessary? I expect not if I do paired-end merging first
-if ask "Attempt to trim illumina adapters using cutadapt? [y/N]"
+#Trim Illumina adapters with Trim Galore
+########################################
+#Alternatively, pairing the reads with PEAR seems to do a lot of quality filtering for you
+#We call a modified version of the trim glore script which uses the -b search algorithm
+#(searches both 3' and 5' ends for adapter sequence)
+if ask "Keep paired reads separate (trim galore, rainbow, etc.)? [Y/n]" 1
 then
-  echo "Calling cutadapt to trim Illumina adapters..."
+  echo "Using Trim Galore to trim Illumina adapters..."
   working_files=*_R1_*.fastq.gz
 
-  #Turns out I can pass the same stuff to each file
-  #I don't have to care about the barcodes
-  #barcodes=$configdir/barcodes
-  fwd_adapt=AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC
-  rvs_adapt=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT
-  #TODO:
-  #Trim Galore only trims 3' side
-  #modify it to include 5' side
+  # Forward and reverse TruSeq adapters
+  fwd_adapt=GATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNNNATCTCGTATGCCGTCTTCTGCTTG
+  rvs_adapt=GATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTNNNNNNNNGTGTAGATCTCGGTGGTCGCCGTATCATT
   for fq in $working_dir/$working_files
   do
     #Setup filenames
     fq_f=fq             #forward read file
     fq_r=${fq_f/R1/R2}  #reverse read file
 
-    fq_f_trim=$(basename $fq_f .fastq.gz)_trim.fastq.gz       #trimmed forward reads
-    fq_f_untrim=$(basename $fq_f .fastq.gz)_untrim.fastq.gz   #untrimmed forward reads
-    fq_r_trim=$(basename $fq_r .fastq.gz)_trim.fastq.gz       #trimmed reverse reads
-    fq_r_untrim=$(basename $fq_r .fastq.gz)_untrim.fastq.gz   #untrimmed reverse reads
-
-    #pass all this info to cutadapt
-    $sysutil/cutadapt \
+    # pass to Trim Galore
+    $locutil/trim_galore \
+      --phred33 --paired \
+      --length 70 \
+      --retain_unpaired \
+      --dont_gzip \
       -a $fwd_adapt \
-      -A $rvs_adapt \
-      -o $outputdir/$fq_f_trim \
-      -p $outputdir/$fq_r_trim \
-      --untrimmed-output $outputdir/$fq_f_untrim \
-      --untrimmed-paired-output $outputdir/$fq_r_untrim \
+      -a2 $rvs_adapt \
+      --stringency 10 \
+      -e 0.1 -q 10 -r1 75 -r2 75 \
+      --output_dir $outputdir \
+      --fastqc --fastqc_args="-o $outputdir/QC" \
+      --clip_R1 4 --clip_R2 4 --three_prime_clip_R1 1 --three_prime_clip_R2 1 \
       $fq_f $fq_r
-    
   done
+  genQC false $outputdir/QC
   #Set working fileset to adapter-trimmed fastq files
   working_files=*_trim.fastq.gz
 fi
-
-######################################################
-
-#   Paired-end merging with PEAR
-######################################################
-if ask "Attempt to merge paired reads with PEAR? [y/N]"
-then
-  echo "Merging paired-end reads..."
-
-  mkdir -p $outputdir
-  working_files=*_R1_*.fastq.gz
-  for fq in $working_dir/$working_files
-  do
-    #PEAR options
-    #-n 33: minimum assembly length 33
-    #-t 33: minimum trip length 33
-    #-q 10: minimum quality score 10
-    #-j 2: set number of threads (processors)
-    #-u 0: disallow uncalled bases (throw out N's)
-    #-m 550: maximum length of reads
-    #-y 1g: use 1G of memory
-    $locutil/pear -f $fq \
-      -r ${fq/R1/R2} \
-      -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
-      -n 33 \
-      -t 33 \
-      -q 10 \
-      -j 2 \
-      -u 0 \
-      -m 550 \
-      -y 1g
-  done
-  #Set working fileset to assembled read files
-  working_files=*_merged_*.assembled.fastq
-  #Remember that our reads have been merged
-  paired=true
-fi
+#--------------------------------------------------
+# ##################################################################
+# #   Paired-end merging with PEAR (ignore this for the time being)
+# ##################################################################
+# elif ask "Attempt to merge paired reads with PEAR? [y/N]"
+# then
+#   echo "Merging paired-end reads..."
+# 
+#   mkdir -p $outputdir
+#   working_files=*_R1_*.fastq.gz
+#   for fq in $working_dir/$working_files
+#   do
+#     #PEAR options
+#     #-n 33: minimum assembly length 33
+#     #-t 33: minimum trip length 33
+#     #-q 10: minimum quality score 10
+#     #-j 2: set number of threads (processors)
+#     #-u 0: disallow uncalled bases (throw out N's)
+#     #-m 550: maximum length of reads
+#     #-y 1g: use 1G of memory
+#     $locutil/pear -f $fq \
+#       -r ${fq/R1/R2} \
+#       -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
+#       -n 33 \
+#       -t 33 \
+#       -q 10 \
+#       -j 2 \
+#       -u 0 \
+#       -m 550 \
+#       -y 1g
+#   done
+#   #Set working fileset to assembled read files
+#   working_files=*_merged_*.assembled.fastq
+#   #Remember that our reads have been merged
+#   paired=true
+# fi
+#-------------------------------------------------- 
 
 #Switch working directory to location of proccessed files
 working_dir=$outputdir
 
-echo "Quality-filtering reads:"
-echo "Discarding whole reads with <90% of bases having quality score >= 20..."
-pause
-# Filtering reads based on % quality (filters out poor quality reads overall)
-# -q 20 -p 90 means it filters whole reads that do not have a Qscore of 20 in 90% of bases
-# uses $min_quality and $quality_percent variables
-for fq in $working_dir/$working_files
-do
-  barefile=${fq##*/} #similar to $(basename fq)
-  barefile=${barefile%#.*} #does what $(basename fq .ext) doe for any extension
-  #Make sure we are transparent to whether the fastq file is gzipped or not
-  #if we used PEAR, they're not zipped, otherwise they probably are
-  #the product of this section will be gzipped fastq files with "_Qual20" tagged on the end
-  is_zipped $fq && catcmd=gzcat || catcmd=cat
-  $catcmd $fq | $sysutil/fastq_quality_filter \
-    -q $min_quality \
-    -p $quality_percent \
-    -z -v \
-    -o $(barefile)_Qual20.fastq.gz
-done
+#--------------------------------------------------
+#TODO: figure out if this is necessary
+# echo "Quality-filtering reads:"
+# echo "Discarding whole reads with <90% of bases having quality score >= 20..."
+# pause
+# # Filtering reads based on % quality (filters out poor quality reads overall)
+# # -q 20 -p 90 means it filters whole reads that do not have a Qscore of 20 in 90% of bases
+# # uses $min_quality and $quality_percent variables
+# for fq in $working_dir/$working_files
+# do
+#   barefile=${fq##*/} #similar to $(basename fq)
+#   barefile=${barefile%#.*} #does what $(basename fq .ext) doe for any extension
+#   #Make sure we are transparent to whether the fastq file is gzipped or not
+#   #if we used PEAR, they're not zipped, otherwise they probably are
+#   #the product of this section will be gzipped fastq files with "_Qual20" tagged on the end
+#   is_zipped $fq && catcmd=gzcat || catcmd=cat
+#   $catcmd $fq | $sysutil/fastq_quality_filter \
+#     -q $min_quality \
+#     -p $quality_percent \
+#     -z -v \
+#     -o $(barefile)_Qual20.fastq.gz
+# done
+#-------------------------------------------------- 
 
 
 
 
-#Quality Trimming - may trim low quality ends if necessary
-#if there are poor quality ends you can trim them off (e.g., -t 20 -l 50 says if you see a Qscore < 20 cut off everything 3')
-#and if the resulting fragment is < 50 bases then throw it out
-#/home/jw2/programs/fastx/fastq_quality_trimmer -t 20 -l 50 -v -i MEL_R1_untrim.fastq -o MEL_R1_cleanQualTrim.fastq -Q 33
-
-############# Filtering Unpaired Sequences #######################
-#TODO: Make this work if we use cutadapt first (although I'm probably not doing that)
-#This is unneccessary if we've paired with PEAR
-if ! $paired
-then
-#If we have unpaired reads, we might have had to do this before calling cutadapt
-#usage: Perl filterNonPairedReads.pl <output_prefix> <read_1.fastq.gz> <read_2.fastq.gz>
-#requires reads to be compressed in .gz format
-#perl /home/jw2/scripts/filterNonPairedReads.pl MEL_filtered_cQTF MEL_R1_cleanQualTrimFilt.fastq.gz MEL_R2_cleanQualTrimFilt.fastq.gz
-  echo "Filtering out unpaired reads from forward and reverse fastq files..."
-  echo "Nothing actually happens here right now"
-  pause
-fi
-
-#### CONCLUSION
-#compared FastQC of QualTrimmed and QualFiltered of MEL_R1_clean.fastq (adapter cleaned) and the quality looks
-#great from just doing QualTrim (q-20) to trim 3' ends of poor quality. Most are trimmed only a few bases and it 
-#conserves the 5' end for clustering. However, its fine to use the Quality Trimmed and QualFilt for read1 for 
-#rainbow then can use just the QualTrim for aligning.  Read2 use just QualTrim for both assembly and aligning. 
-#As long as Quality is good, having more reads for assembly (longer contigs) and aligning (more coverage) is beneficial.
-
+#--------------------------------------------------
+# ############# Filtering Unpaired Sequences #######################
+# #TODO: I think we only need to filter unpaired reads if we've fastq_quality_filter'd first
+#        otherwise, trim galore handles it for us
+# #This is unneccessary if we've paired with PEAR
+# if ! $paired
+# then
+# #If we have unpaired reads, we might have had to do this before calling cutadapt
+# #usage: Perl filterNonPairedReads.pl <output_prefix> <read_1.fastq.gz> <read_2.fastq.gz>
+# #requires reads to be compressed in .gz format
+# #perl /home/jw2/scripts/filterNonPairedReads.pl MEL_filtered_cQTF MEL_R1_cleanQualTrimFilt.fastq.gz MEL_R2_cleanQualTrimFilt.fastq.gz
+#   echo "Filtering out unpaired reads from forward and reverse fastq files..."
+#   echo "Nothing actually happens here right now"
+#   pause
+# fi
+#-------------------------------------------------- 
 
 ######################################################################################################################## 
 ################ RAINBOW: create de novo assemblies

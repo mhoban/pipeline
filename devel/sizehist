@@ -1,0 +1,20 @@
+#!/bin/bash
+
+#This utility generates a histogram of
+#read lengths in a fastq file
+#Output: 
+#
+#Size           Count
+#---------------------
+#readlenghth    num
+source $HOME/code/pipeline/devel/funx.sh
+
+is_zipped $1 && catcmd=gzcat || catcmd=cat
+
+echo -e 'Size\tCount'
+echo ---------------------------
+$catcmd $1 \
+  | perl -ne '$s=<>;<>;<>;chomp($s);print length($s)."\n";' \
+  | sort -n \
+  | uniq -c \
+  | awk '{printf "%d\t%d\n", $2,$1}'
