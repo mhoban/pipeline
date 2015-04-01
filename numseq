@@ -1,0 +1,11 @@
+#!/bin/bash
+
+function is_zipped {
+  if [[ -r $1 ]]; then
+    return $(file $1 | grep -q 'gzip')
+  else return 1; fi
+}
+
+is_zipped $1 && cmd=gzcat || cmd=cat
+
+$cmd $1 | wc -l | awk '{printf "%'"'"'d", $1/4}'
