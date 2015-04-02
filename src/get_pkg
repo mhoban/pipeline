@@ -11,6 +11,7 @@
 # rainbow http://sourceforge.net/projects/bio-rainbow/files/latest/download?source=files rainbow_src.tar.gz
 # vcftools http://sourceforge.net/projects/vcftools/files/latest/download?source=files vcftools_src.tar.gz
 # zlib (needed to compile pear on my system, but probably not generally)
+# FastQC http://www.bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v0.11.3.zip fastqc.zip
 
 git clone https://github.com/xflouris/PEAR.git
 git glone https://github.com/agordon/fastx_toolkit.git
@@ -23,4 +24,9 @@ wget http://sourceforge.net/projects/vcftools/files/latest/download?source=files
 if [[ -f vcftools_src.tar.gz ]]; then
   tar zxvf vcftools_src.tar.gz
   rm vcftools_src.tar.gz
+fi
+wget http://www.bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v0.11.3.zip -O fastqc.zip
+if [[ -f fastqc.zip ]]; then 
+  unzip fastqc.zip
+  rm fastqc.zip
 fi
