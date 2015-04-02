@@ -47,7 +47,8 @@ paired=false
 ########################################################################################
 #setup stuff:
 mkdir -p $outputdir       #create working output directory
-source funx.sh
+DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+source $PIPEDIR/funx
 
 function genQC() {
   local qc=$1

@@ -7,7 +7,7 @@
 #Size           Count
 #---------------------
 #readlenghth    num
-source $HOME/code/pipeline/devel/funx.sh
+source $PIPEDIR/funx
 
 is_zipped $1 && catcmd=gzcat || catcmd=cat
 
