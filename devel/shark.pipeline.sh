@@ -4,34 +4,36 @@
 #cutadapt: why does the R2 read have the -m 30 otions set, but the R1 read doesn't?
 #sample stats: How did you generate these? (esp "reads starting with cut site")
 
-#Dependencies managed by homebrew:
-#fastqc
-#fastx_toolki
-
-#Dependencies installed manually (unless otherwise noted, symlinked from $basedir/bin/ to $basedir/src/<project>)
-#cutadapt (installed via python pip)
+#Dependencies 
+#(must be in path: typically these are installed to $baseddir/bin and/or symlinked to $basedir/src)
+#see README.md for very basic notes on installing some of these things
+#cutadapt
 #PEAR
+#fastqc
+#fastx_toolkit
 #rainbow
-#Trim Galore
+#Trim Galore (included in source tree since we use a modified version)
 
 
-#General setup variables
+#General setup variables (USER CHANGEABLE)
 ########################################################################################
 #data directories:
-basedir=/Users/deadbilly/code/pipeline    #base directory for pipeline junk
-datadir=$basedir/data/shark               #base directory for sequence data / config
-configdir=$datadir/config                 #various config files live in here
-fastqdir=$datadir/sample.fastq/           #directory where raw fastq files are stored
-                                          #fastq filenames are expected to be in the 
-                                          #format *_SAMPLEID_*_R1_*.fasta.gz/*_SAMPLEID_*_R2_*.fasta.gz
+basedir=$PIPEDIR                  #base directory for pipeline junk ($PIPEDIR is set by pipeline.sh)
+datadir=$basedir/data/shark       #base directory for sequence data / config
+
 #working directories:
+working_dir=$datadir/fastq        #where to start, this will be the
+                                  #directory where raw fastq files are stored
+                                  #fastq filenames are expected to be in the 
+                                  #format *SAMPLEID_*_R1_*.fastq.gz/*SAMPLEID_*_R2_*.fastq.gz
+# What files are we currently dealing with
+working_files=*.fastq.gz
 outputdir=$datadir/output
-working_dir=$fastqdir
 
 
 #executable directories:
-sysutil=/usr/local/bin                    #utility binary directory (systemwide)
-locutil=$basedir/bin                      #utility binary directory (locally installed)
+#sysutil=/usr/local/bin                    #utility binary directory (systemwide)
+#locutil=$basedir/bin                      #utility binary directory (locally installed)
 ########################################################################################
 #Pipeline-specific config
 #
@@ -40,15 +42,13 @@ locutil=$basedir/bin                      #utility binary directory (locally ins
 min_quality=20
 quality_percent=90
 #
-# What files are we currently dealing with
-working_files=*.fastq.gz
-#Have our reads been paired?
+#Should our reads be paired?
 paired=false
 ########################################################################################
 #setup stuff:
 mkdir -p $outputdir       #create working output directory
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
-source $PIPEDIR/funx
+source $PIPEDIR/devel/funx
 
 function genQC() {
   local qc=$1
@@ -61,7 +61,7 @@ function genQC() {
 
   if [[ $qc == true ]]; then
     # Call FastQC
-    $sysutil/fastqc -o $qcdir $@
+    fastqc -o $qcdir $@
   fi
 
   # Generate HTML index
@@ -98,10 +98,35 @@ fi
 #Alternatively, pairing the reads with PEAR seems to do a lot of quality filtering for you
 #We call a modified version of the trim glore script which uses the -b search algorithm
 #(searches both 3' and 5' ends for adapter sequence)
-if ask "Keep paired reads separate (trim galore, rainbow, etc.)? [Y/n]" 1
+if [[  $paired == false ]]
 then
-  echo "Using Trim Galore to trim Illumina adapters..."
+  echo "Using Trim Galore to trim Illumina adapters and perform initial quality filtering..."
   working_files=*_R1_*.fastq.gz
+  mkdir -p $outputdir/QC
+
+  if ask "Perform initial quality trimming/filtering? [y/N]"; 
+  then
+    working_files=*.fastq.gz
+    which gzcat >/dev/null 2>&1 && zcat=gzcat || zcat=zcat
+    echo "Trimming poor-quality ends..."
+    for f in $working_dir/$working_files
+    do
+      echo "Trimming $f..."
+      is_zipped $f && cmd=$zcat || cmd=cat
+      $cmd $f | fastq_quality_trimmer -t 20 -l 33 -z > $outputdir/$(basename $f .fastq.gz)_trimmed.fastq.gz
+    done
+    working_dir=$outputdir
+    working_files=*_trimmed.fastq.gz
+
+    echo "Filtering poor-quality ends..."
+    for f in $working_dir/$working_files
+    do
+      echo "Filtering $f..."
+      is_zipped $f && cmd=$zcat || cmd=cat
+      $cmd $f | fastq_quality_filter -q 20 -p 90 -z > $outputdir/$(basename $f .fastq.gz)_filtered.fastq.gz
+    done
+    working_files=*R1*_filtered.fastq.gz
+  fi
 
   # Forward and reverse TruSeq adapters
   fwd_adapt=GATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNNNATCTCGTATGCCGTCTTCTGCTTG
@@ -109,11 +134,12 @@ then
   for fq in $working_dir/$working_files
   do
     #Setup filenames
-    fq_f=fq             #forward read file
+    fq_f=$fq             #forward read file
     fq_r=${fq_f/R1/R2}  #reverse read file
 
     # pass to Trim Galore
-    $locutil/trim_galore \
+    echo "Running Trim Galore: $fq_f, $fq_r"
+    trim_galore \
       --phred33 --paired \
       --length 70 \
       --retain_unpaired \
@@ -121,7 +147,7 @@ then
       -a $fwd_adapt \
       -a2 $rvs_adapt \
       --stringency 10 \
-      -e 0.1 -q 10 -r1 75 -r2 75 \
+      -e 0.1 -q $min_quality -r1 75 -r2 75 \
       --output_dir $outputdir \
       --fastqc --fastqc_args="-o $outputdir/QC" \
       --clip_R1 4 --clip_R2 4 --three_prime_clip_R1 1 --three_prime_clip_R2 1 \
@@ -129,48 +155,12 @@ then
   done
   genQC false $outputdir/QC
   #Set working fileset to adapter-trimmed fastq files
-  working_files=*_trim.fastq.gz
+  working_files=*_val_?.fq
+  #Switch working directory to location of proccessed files
+  working_dir=$outputdir
 fi
-#--------------------------------------------------
-# ##################################################################
-# #   Paired-end merging with PEAR (ignore this for the time being)
-# ##################################################################
-# elif ask "Attempt to merge paired reads with PEAR? [y/N]"
-# then
-#   echo "Merging paired-end reads..."
-# 
-#   mkdir -p $outputdir
-#   working_files=*_R1_*.fastq.gz
-#   for fq in $working_dir/$working_files
-#   do
-#     #PEAR options
-#     #-n 33: minimum assembly length 33
-#     #-t 33: minimum trip length 33
-#     #-q 10: minimum quality score 10
-#     #-j 2: set number of threads (processors)
-#     #-u 0: disallow uncalled bases (throw out N's)
-#     #-m 550: maximum length of reads
-#     #-y 1g: use 1G of memory
-#     $locutil/pear -f $fq \
-#       -r ${fq/R1/R2} \
-#       -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
-#       -n 33 \
-#       -t 33 \
-#       -q 10 \
-#       -j 2 \
-#       -u 0 \
-#       -m 550 \
-#       -y 1g
-#   done
-#   #Set working fileset to assembled read files
-#   working_files=*_merged_*.assembled.fastq
-#   #Remember that our reads have been merged
-#   paired=true
-# fi
-#-------------------------------------------------- 
-
-#Switch working directory to location of proccessed files
-working_dir=$outputdir
+exit 0
+#THIS IS THE END
 
 #--------------------------------------------------
 #TODO: figure out if this is necessary
@@ -213,6 +203,43 @@ working_dir=$outputdir
 #   echo "Filtering out unpaired reads from forward and reverse fastq files..."
 #   echo "Nothing actually happens here right now"
 #   pause
+# fi
+#-------------------------------------------------- 
+#--------------------------------------------------
+# ##################################################################
+# #   Paired-end merging with PEAR (ignore this for the time being)
+# ##################################################################
+# elif ask "Attempt to merge paired reads with PEAR? [y/N]"
+# then
+#   echo "Merging paired-end reads..."
+# 
+#   mkdir -p $outputdir
+#   working_files=*_R1_*.fastq.gz
+#   for fq in $working_dir/$working_files
+#   do
+#     #PEAR options
+#     #-n 33: minimum assembly length 33
+#     #-t 33: minimum trip length 33
+#     #-q 10: minimum quality score 10
+#     #-j 2: set number of threads (processors)
+#     #-u 0: disallow uncalled bases (throw out N's)
+#     #-m 550: maximum length of reads
+#     #-y 1g: use 1G of memory
+#     $locutil/pear -f $fq \
+#       -r ${fq/R1/R2} \
+#       -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
+#       -n 33 \
+#       -t 33 \
+#       -q 10 \
+#       -j 2 \
+#       -u 0 \
+#       -m 550 \
+#       -y 1g
+#   done
+#   #Set working fileset to assembled read files
+#   working_files=*_merged_*.assembled.fastq
+#   #Remember that our reads have been merged
+#   paired=true
 # fi
 #-------------------------------------------------- 
 

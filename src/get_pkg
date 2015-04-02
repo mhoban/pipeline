@@ -16,6 +16,7 @@
 git clone https://github.com/xflouris/PEAR.git
 git clone https://github.com/agordon/libgtextutils.git
 git clone https://github.com/agordon/fastx_toolkit.git
+git clone https://github.com/marcelm/cutadapt.git
 curl -L http://downloads.sourceforge.net/project/bio-rainbow/rainbow_2.0.3.tar.gz > rainbow_src.tar.gz
 #wget http://downloads.sourceforge.net/project/bio-rainbow/rainbow_2.0.3.tar.gz -O rainbow_src.tar.gz
 if [[ -f rainbow_src.tar.gz ]]; then
@@ -33,3 +34,9 @@ if [[ -f fastqc.zip ]]; then
   unzip fastqc.zip
   rm fastqc.zip
 fi
+wget http://cython.org/release/Cython-0.22.tar.gz -O cython.tar.gz
+if [[ -f cython.tar.gz ]]; then
+  tar zxvf cython.tar.gz
+  rm cython.tar.gz
+fi
+git clone https://github.com/dzerbino/velvet.git

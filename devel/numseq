@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source $PIPEDIR/funx
+source $PIPEDIR/devel/funx
 
 which gzcat >/dev/null 2>&1 && zcat=gzcat || zcat=zcat
 

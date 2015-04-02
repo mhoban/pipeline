@@ -25,3 +25,50 @@ function is_zipped {
     return $(file $1 | grep -q 'gzip')
   else return 1; fi
 }
+
+multiMenu() {
+  local original_options=("${!1}")
+  #echo choices ${original_options[@]}
+  declare -A sel
+
+  tput sc
+  PS3='Please enter your choice: '
+  while :
+  do
+    #clear
+    tput rc
+    tput ed
+    local o=("${original_options[@]}")
+
+    for ((i=0; i<${#o[*]}; i++))
+    do
+      o[$i]=${o[$i]}
+      o[$i]+=${sel[${o[$i]}]}
+    done
+    o+=('Select when finished')
+
+
+    select opt in "${o[@]}"
+    do
+      case $opt in
+        "Select when finished")
+          break 2
+          ;;
+
+        *) 
+          if [[ "$opt" == "" ]]; then break; fi
+          opt=${opt%%+*}
+          if [[ ${sel[$opt]} ]] # toggle
+          then
+            sel[$opt]=
+          else
+            sel[$opt]=+
+          fi
+          break
+          ;;
+      esac
+    done
+  done
+  local __resultVar=$2
+  eval $__resultVar='('${!sel[@]}')'
+}

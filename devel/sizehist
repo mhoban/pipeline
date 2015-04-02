@@ -7,9 +7,10 @@
 #Size           Count
 #---------------------
 #readlenghth    num
-source $PIPEDIR/funx
+source $PIPEDIR/devel/funx
 
-is_zipped $1 && catcmd=gzcat || catcmd=cat
+which gzcat >/dev/null 2>&1 && zcat=gzcat || zcat=zcat
+is_zipped $1 && catcmd=$zcat || catcmd=cat
 
 echo -e 'Size\tCount'
 echo ---------------------------

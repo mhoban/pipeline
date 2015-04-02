@@ -19,5 +19,8 @@ if [[ ! -d bin ]]; then
   done
 fi
 export PATH=$(fullPath bin/):$PATH
-export PIPEDIR=$HOME/pipeline/devel
+if [[ -d $HOME/.local/bin ]]; then
+  export PATH=$HOME/.local/bin:$PATH
+fi
+export PIPEDIR=$HOME/pipeline
 unset fullPath

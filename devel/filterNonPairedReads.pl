@@ -15,14 +15,14 @@ print "pair1: $pair1\n";
 print "pair2: $pair2\n";
 print;
 
-open ($pair1FH, '-|', 'gzcat', "$pair1") || die "Cannot Open pair 1 File";
+open ($pair1FH, '-|', 'zcat', "$pair1") || die "Cannot Open pair 1 File";
 print "------\n";
 print $pair1,"\n";
 print "------\n";
 
 <STDIN>;
 
-open ($pair2FH, '-|', 'gzcat', "$pair2") || die "Cannot Open pair 2 File";
+open ($pair2FH, '-|', 'zcat', "$pair2") || die "Cannot Open pair 2 File";
 print "------\n";
 print $pair2,"\n";
 print "------\n";
@@ -56,8 +56,8 @@ for my $pairFH (@pairedFiles) {
   close($pairFH);
 }
 
-open ($pair1FH, '-|', 'gzcat', "$pair1") || die "Cannot Open pair 1 File";
-open ($pair2FH, '-|', 'gzcat', "$pair2") || die "Cannot Open pair 2 File";
+open ($pair1FH, '-|', 'zcat', "$pair1") || die "Cannot Open pair 1 File";
+open ($pair2FH, '-|', 'zcat', "$pair2") || die "Cannot Open pair 2 File";
 @pairedFiles = ($pair1FH,$pair2FH);
 #open ($pair1outFH, "| gzip >$outName.pair1.fastq.gz") || die "Cannot Open pair out 1 File";
 #open ($pair2outFH, "| gzip >$outName.pair2.fastq.gz") || die "Cannot Open pair out 2 File";
