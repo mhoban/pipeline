@@ -2,12 +2,13 @@
 Analysis pipeline for next-generation (Illumina) sequence data consisting of pooled samples
 
 ###Usage notes
-Before doing anything with your data or any of the scripts in here, **source** the pipeline.sh
+Before doing anything with your data or any of the scripts in here, modify the pipeline.sh script
+so that $PIPEDIR points to the appropriate location. Then **source** the pipeline.sh
 script located in the "root" of the pipeline tree:
 
-$ . pipeline.sh
+**$ . pipeline.sh**
 or
-$ source pipeline.sh
+**$ source pipeline.sh**
 
 ###Installation notes
 There is a script in the src/ directory that gets source packages you might need.
