@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# Very simple script to get the external tools needed for this pipeline
+
+# trim galore is maintained in code repo, since we modify it
+# vcftools_x.tar.gz
+
+# Packages to grab
+# PEAR https://github.com/xflouris/PEAR.git
+# fastx-toolkit https://github.com/agordon/fastx_toolkit.git
+# rainbow http://sourceforge.net/projects/bio-rainbow/files/latest/download?source=files rainbow_src.tar.gz
+# vcftools http://sourceforge.net/projects/vcftools/files/latest/download?source=files vcftools_src.tar.gz
+# zlib (needed to compile pear on my system, but probably not generally)
+
+git clone https://github.com/xflouris/PEAR.git
+git glone https://github.com/agordon/fastx_toolkit.git
+wget http://sourceforge.net/projects/bio-rainbow/files/latest/download?source=files -O rainbow_src.tar.gz
+if [[ -f rainbow_src.tar.gz ]]; then
+  tar zxvf rainbow_src.tar.gz
+  rm rainbow_src.tar.gz
+fi
+wget http://sourceforge.net/projects/vcftools/files/latest/download?source=files -O vcftools_src.tar.gz
+if [[ -f vcftools_src.tar.gz ]]; then
+  tar zxvf vcftools_src.tar.gz
+  rm vcftools_src.tar.gz
+fi
