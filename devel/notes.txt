@@ -14,3 +14,29 @@ Strategy?
 de novo assemble 2 pools, merge them with usearch, use that as reference?
 cdhit against rainbow output to dereplicate 
 (or usearch, which looks for reverse complements)
+
+Supercomputer notes
+---------------------------------------------------
+SLURM - job scheduler
+--------------------------------
+squeue: what's running
+sinfo: what are the available partitions
+sbatch: submit job
+
+interactive session: 
+srun -p <partition> -N 1 -n 1 --pty -t 0-00:05 /bin/bash
+srun.x11  for X11 forwarding
+
+
+
+partitions
+-------------
+all.q
+lm.q
+class.q: higher priority queue
+
+
+SLURM job script: see example
+-----------------------
+sbatch script.slurm
+squeue -j job_id

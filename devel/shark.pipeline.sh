@@ -19,10 +19,10 @@
 ########################################################################################
 #data directories:
 basedir=$PIPEDIR                  #base directory for pipeline junk ($PIPEDIR is set by pipeline.sh)
-datadir=$basedir/data/shark       #base directory for sequence data / config
+datadir=$basedir/data/shark/fastq       #base directory for sequence data / config
 
 #working directories:
-working_dir=$datadir/fastq        #where to start, this will be the
+working_dir=$datadir              #where to start, this will be the
                                   #directory where raw fastq files are stored
                                   #fastq filenames are expected to be in the 
                                   #format *SAMPLEID_*_R1_*.fastq.gz/*SAMPLEID_*_R2_*.fastq.gz
@@ -42,8 +42,15 @@ outputdir=$datadir/output
 min_quality=20
 quality_percent=90
 #
-#Should our reads be paired?
-paired=false
+
+merge_pairs=false            #try with PEAR-merged reads
+mergedir=                   #directory where merged files live
+merge_threads=2           #number of cores & memory to use
+merge_mem=2G
+ignore_unmerged=false   #don't try with unmerged reads
+interactive=true        #run in console or batch mode
+skipqc=false
+trimfilter=false        #do extra trimming/filtering via fastx_toolkit
 ########################################################################################
 #setup stuff:
 mkdir -p $outputdir       #create working output directory
@@ -72,23 +79,97 @@ function genQC() {
   echo "</html></body>" >> $qcdir/index.html
 
   # Prompt to open browser
-  if ask "Launch browser to view QC reports? [y/N]"; then
+  if $interactive && ask "Launch browser to view QC reports? [y/N]"; then
     open $qcdir/index.html
     pause
   fi
 }
 
+function usage() {
+  echo "Usage: shark.pipeline.sh [options]"
+  echo -e '  -b, --batch-mode\t\tRun in batch mode (non-interactive)'
+  echo -e "  -n, --ignore-unmerged-reads\t\tDon't use unpaired read files (requires -m)"
+  echo -e "  -m, --merge-reads\t\tUse PEAR to merge paired-end reads"
+  echo -e "  -q, --quality cutoff <qual>\t\tMinimum quality score cutoff"
+  echo -e "  -w, --working-files <files>\t\tStarting fastq files (can be wildcard)"
+  echo -e "  -i, --input-dir <dir>\t\tData directory (location of raw reads)"
+  echo -e "  -o, --output-dir <dir>\t\tOutput directory (base of constructed tree -- will be created)"
+  echo "extra-trimming"
+  echo "merge-threads"
+  echo "merge-mem"
+  echo "skip-qc"
+  exit 0
+}
 
-############  Prepare REFERENCE GENOME #################
-#import data from server
-#wget --user=biocore --password=1234qwerty 'http://courge.ics.hawaii.edu/~mahdi/11_22_2013/Project_Jon_Whitney.tar.gz'
-
+shortopts='hbnmtq:w:i:o:'
+longopts='skip-qc,help,merge-threads:,merge-mem:,batch-mode,ignore-unmerged-reads,merge-reads,extra-trimming,quality-cutoff:,working-files:,input-dir:,output-dir:'
+TEMP=$(getopt -o $shortopts --long $longopts -n 'shark.pipeline.sh' -- "$@")
+eval set -- "$TEMP"
+while true; do
+  case "$1" in
+    --skip-qc)
+      skipqc=true
+      shift
+      ;;
+    --merge-threads)
+      merge_threads=$2
+      shift 2
+      ;;
+    --merge-mem)
+      merge_mem=$2
+      shift 2
+      ;;
+    -b|--batch-mode)
+      interactive=false
+      shift
+      ;;
+    -n|--ignore-unmerged-reads)
+      ignore_unmerged-true
+      shift
+      ;;
+    -m|--merge-reads)
+      merge_pairs=true
+      shift
+      ;;
+    -t|--extra-trimming)
+      trimfilter=true
+      shift
+      ;;
+    -q|--quality-cutoff)
+      min_quality=$2
+      shift 2
+      ;;
+    -w|--working-files)
+      working_files=$2
+      shift 2
+      ;;
+    -i|--input-dir)
+      datadir=$2
+      shift 2
+      ;;
+    -o|--output-dir)
+      outputdir=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      shift
+      ;;
+    --)
+      shift; break;;
+    *)
+      echo "B0rk!"; exit 1;;
+  esac
+done
 
 ########### Preparing Raw Sequences ############
+working_dir=$datadir    #assuming *.fastq.gz, R1,R2 paired reads
+mergedir=$outputdir/merged.pair
 
 #Generate quality stats with fastqc
+#no choice if running in batch mode
 #####################################
-if ask "Generate initial FastQC reports? [y/N]"
+if ! $skipqc && ( ! $interactive || ask "Generate initial FastQC reports? [y/N]" )
 then
   genQC true $outputdir/QC $working_dir/$working_files
 fi
@@ -98,13 +179,12 @@ fi
 #Alternatively, pairing the reads with PEAR seems to do a lot of quality filtering for you
 #We call a modified version of the trim glore script which uses the -b search algorithm
 #(searches both 3' and 5' ends for adapter sequence)
-if [[  $paired == false ]]
-then
+if ! $ignore_unmerged; then
   echo "Using Trim Galore to trim Illumina adapters and perform initial quality filtering..."
   working_files=*_R1_*.fastq.gz
   mkdir -p $outputdir/QC
 
-  if ask "Perform initial quality trimming/filtering? [y/N]"; 
+  if $trimfilter || ( $interactive && ask "Perform initial quality trimming/filtering? [y/N]" )
   then
     working_files=*.fastq.gz
     which gzcat >/dev/null 2>&1 && zcat=gzcat || zcat=zcat
@@ -159,6 +239,45 @@ then
   #Switch working directory to location of proccessed files
   working_dir=$outputdir
 fi
+
+##################################################################
+#   Paired-end merging with PEAR (ignore this for the time being)
+##################################################################
+if $merge_pairs ||  ( $interactive && ask "Attempt to merge paired reads with PEAR? [y/N]" )
+then
+  echo "Merging paired-end reads..."
+
+  mkdir -p $mergedir
+  working_dir=$datadir
+  working_files=*_R1_*.fastq.gz
+  for fq in $working_dir/$working_files
+  do
+    #PEAR options
+    #-n 33: minimum assembly length 33
+    #-t 33: minimum trip length 33
+    #-q 10: minimum quality score 10
+    #-j 2: set number of threads (processors)
+    #-u 0: disallow uncalled bases (throw out N's)
+    #-m 550: maximum length of reads
+    #-y 1g: use 1G of memory
+    pear \
+      -f $fq \
+      -r ${fq/R1/R2} \
+      -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
+      -n 33 \
+      -t 33 \
+      -q 10 \
+      -j $merge_threads \
+      -u 0 \
+      -m 550 \
+      -y $merge_mem
+  done
+  #Set working fileset to assembled read files
+  merged_assemblies=*_merged_*.assembled.fastq
+  #Remember that our reads have been merged
+  paired=true
+fi
+
 exit 0
 #THIS IS THE END
 
@@ -206,42 +325,6 @@ exit 0
 # fi
 #-------------------------------------------------- 
 #--------------------------------------------------
-# ##################################################################
-# #   Paired-end merging with PEAR (ignore this for the time being)
-# ##################################################################
-# elif ask "Attempt to merge paired reads with PEAR? [y/N]"
-# then
-#   echo "Merging paired-end reads..."
-# 
-#   mkdir -p $outputdir
-#   working_files=*_R1_*.fastq.gz
-#   for fq in $working_dir/$working_files
-#   do
-#     #PEAR options
-#     #-n 33: minimum assembly length 33
-#     #-t 33: minimum trip length 33
-#     #-q 10: minimum quality score 10
-#     #-j 2: set number of threads (processors)
-#     #-u 0: disallow uncalled bases (throw out N's)
-#     #-m 550: maximum length of reads
-#     #-y 1g: use 1G of memory
-#     $locutil/pear -f $fq \
-#       -r ${fq/R1/R2} \
-#       -o $outputdir/$(basename ${fq/_R1_/_merged_} .fastq.gz) \
-#       -n 33 \
-#       -t 33 \
-#       -q 10 \
-#       -j 2 \
-#       -u 0 \
-#       -m 550 \
-#       -y 1g
-#   done
-#   #Set working fileset to assembled read files
-#   working_files=*_merged_*.assembled.fastq
-#   #Remember that our reads have been merged
-#   paired=true
-# fi
-#-------------------------------------------------- 
 
 ######################################################################################################################## 
 ################ RAINBOW: create de novo assemblies

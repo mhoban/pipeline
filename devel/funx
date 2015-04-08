@@ -31,19 +31,22 @@ multiMenu() {
   #echo choices ${original_options[@]}
   declare -A sel
 
-  tput sc
+  [[ ! $3 ]] && tput sc
   PS3='Please enter your choice: '
   while :
   do
     #clear
-    tput rc
-    tput ed
+    if [[ ! $3 ]]; then
+      tput rc
+      tput ed
+    fi
     local o=("${original_options[@]}")
 
     for ((i=0; i<${#o[*]}; i++))
     do
-      o[$i]=${o[$i]}
-      o[$i]+=${sel[${o[$i]}]}
+      o[$i]=$(printf "%s%s%s" ${sel[${o[$i]}]} ${o[$i]} ${sel[${o[$i]}]})
+      #o[$i]=${o[$i]}
+      #o[$i]+=${sel[${o[$i]}]}
     done
     o+=('Select when finished')
 
@@ -57,10 +60,11 @@ multiMenu() {
 
         *) 
           if [[ "$opt" == "" ]]; then break; fi
-          opt=${opt%%+*}
+          opt=${opt//+/}
+          echo checking opt: $opt
           if [[ ${sel[$opt]} ]] # toggle
           then
-            sel[$opt]=
+            unset sel[$opt] 
           else
             sel[$opt]=+
           fi
