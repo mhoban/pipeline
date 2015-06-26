@@ -1,0 +1,30 @@
+#!/bin/bash
+#--------------------------------------------------
+# function is_zipped {
+#   if [[ -r $1 ]]; then
+#     return $(file $1 | grep -q 'gzip')
+#   else return 1; fi
+# }
+# which gzcat >/dev/null 2>&1 && zcat=gzcat || zcat=zcat
+# f1=$1
+# f2=$2
+# is_zipped $f1 && cat1=$zcat || cat1=cat
+# is_zipped $f2 && cat2=$zcat || cat2=cat
+# 
+# ext1=${f1#*.}
+# ext2=${f2#*.}
+# 
+# out1=$(basename $f1 .$ext1)_pair_1.fq
+# out2=$(basename $f2 .$ext2)_pair_2.fq
+# orphan=$(basename $1 .$ext1)_orphan.fq
+#-------------------------------------------------- 
+#--------------------------------------------------
+# mkfifo tmp
+# awk 'NR%4==1{n=$1}NR%4==2{s=$1}NR%4==0{print n,s,$1}' $f1 | sort -S 2G > tmp &
+# awk 'NR%4==1{n=$1}NR%4==2{s=$1}NR%4==0{print n,s,$1}' $f2 | sort -S 2G | join -a1 -a2 tmp - | awk 'NF==5{print $1"\n"$2"\n+\n"$3 >"'$out1'";print $1"\n"$4"\n+\n"$5 >"'$out2'"}NF==3{print $1"\n"$2"\n+\n"$3>"'$orphan'"}'
+# rm tmp
+#-------------------------------------------------- 
+mkfifo tmp
+awk 'NR%4==1{n=$1}NR%4==2{s=$1}NR%4==0{print n,s,$1}' $1 | sort -S 2G > tmp &
+awk 'NR%4==1{n=$1}NR%4==2{s=$1}NR%4==0{print n,s,$1}' $2 | sort -S 2G | join -a1 -a2 tmp - | awk 'NF==5{print $1"\n"$2"\n+\n"$3 >"x1.fq";print $1"\n"$4"\n+\n"$5 >"x2.fq"}NF==3{print $1"\n"$2"\n+\n"$3>"orphan.fq"}'
+rm tmp

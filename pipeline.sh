@@ -24,3 +24,5 @@ if [[ -d $HOME/.local/bin ]]; then
 fi
 export PIPEDIR=$HOME/pipeline
 unset fullPath
+export PERL5LIB=/home/mhoban/pipeline/dDocent/vcftools_0.1.11/perl:$PERL5LIB
+export MANPATH=/home/mhoban/pipeline/share/man:$MANPATH

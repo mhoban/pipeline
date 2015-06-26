@@ -20,6 +20,7 @@
 #data directories:
 basedir=$PIPEDIR                  #base directory for pipeline junk ($PIPEDIR is set by pipeline.sh)
 datadir=$basedir/data/shark/fastq       #base directory for sequence data / config
+LD_LIBRARY_PATH=$PIPEDIR/lib      #this is needed for PEAR to work
 
 #working directories:
 working_dir=$datadir              #where to start, this will be the
@@ -278,6 +279,7 @@ then
   paired=true
 fi
 
+echo "this stuff is done" | mail -s "YOWSA: done" mhoban@hawaii.edu
 exit 0
 #THIS IS THE END
 

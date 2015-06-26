@@ -1,5 +1,8 @@
 # Ignore some stuff
 bin/
 include/
+libexec/
 share/
 lib/
+lib64/
+jobs/
